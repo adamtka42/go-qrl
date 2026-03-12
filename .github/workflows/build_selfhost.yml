@@ -1,0 +1,71 @@
+name: Build & Test go-zond
+
+on:
+  push:
+    branches: [main, configure-github-action]
+    tags: ['v*']
+  pull_request:
+    branches: [main, configure-github-action]
+  workflow_dispatch:
+    inputs:
+      release_artifacts:
+        description: 'Build release artifacts (tar.gz + Docker image)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, x64, zond]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System info
+        run: |
+          echo "Runner: $(hostname)"
+          echo "Go: $(go version)"
+
+      - name: Build all executables
+        run: make all
+
+      - name: Run tests
+        run: go test -short -timeout=20m -p 1 ./...
+
+      - name: Package release artifact
+        #if: startsWith(github.ref, 'refs/tags/v') || inputs.release_artifacts
+        run: |
+          VERSION=${GITHUB_REF_NAME:-dev}
+          tar -czf gzond-${VERSION}-linux-amd64.tar.gz -C build/bin .
+          echo "ARTIFACT=gzond-${VERSION}-linux-amd64.tar.gz" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        #if: startsWith(github.ref, 'refs/tags/v') || inputs.release_artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gzond-linux-amd64
+          path: ${{ env.ARTIFACT }}
+
+      - name: Docker Login
+        #if: startsWith(github.ref, 'refs/tags/v') || inputs.release_artifacts
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build and push Docker image
+        #if: startsWith(github.ref, 'refs/tags/v') || inputs.release_artifacts
+        run: |
+          VERSION=${GITHUB_REF_NAME:-dev}
+          COMMIT=$(git rev-parse --short HEAD)
+          IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/gzond
+
+          docker build \
+            --build-arg COMMIT=$COMMIT \
+            --build-arg VERSION=$VERSION \
+            -t $IMAGE:$VERSION \
+            -t $IMAGE:latest \
+            .
+
+          docker push $IMAGE:$VERSION
+          docker push $IMAGE:latest
