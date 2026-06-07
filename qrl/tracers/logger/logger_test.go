@@ -81,6 +81,34 @@ func TestStoreCapture(t *testing.T) {
 	}
 }
 
+func TestAccessListTracerUsesFullAddressWord(t *testing.T) {
+	var target common.Address
+	for i := range target {
+		target[i] = byte(i + 1)
+	}
+	if target[0] == 0 {
+		t.Fatal("test target must have non-zero high address bytes")
+	}
+
+	tracer := NewAccessListTracer(nil, common.Address{}, common.Address{}, nil)
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+	env := vm.NewQRVM(vm.BlockContext{}, vm.TxContext{}, &dummyStatedb{StateDB: *statedb}, params.TestChainConfig, vm.Config{Tracer: tracer})
+	contract := vm.NewContract(&dummyContractRef{}, &dummyContractRef{}, new(big.Int), 100000)
+	contract.Code = append([]byte{byte(vm.PUSH1) + common.AddressLength - 1}, target[:]...)
+	contract.Code = append(contract.Code, byte(vm.BALANCE), byte(vm.STOP))
+
+	if _, err := env.Interpreter().Run(contract, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	accessList := tracer.AccessList()
+	if len(accessList) != 1 {
+		t.Fatalf("expected one access-list entry, got %d: %#v", len(accessList), accessList)
+	}
+	if accessList[0].Address != target {
+		t.Fatalf("access-list address truncated\nhave %s\nwant %s", accessList[0].Address, target)
+	}
+}
+
 // Tests that blank fields don't appear in logs when JSON marshalled, to reduce
 // logs bloat and confusion. See https://github.com/theQRL/go-qrl/issues/24487
 func TestStructLogMarshalingOmitEmpty(t *testing.T) {
