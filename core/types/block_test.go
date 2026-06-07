@@ -24,97 +24,107 @@ import (
 
 	"github.com/theQRL/go-qrl/common"
 	"github.com/theQRL/go-qrl/common/math"
+	"github.com/theQRL/go-qrl/crypto"
 	"github.com/theQRL/go-qrl/crypto/pqcrypto"
 	"github.com/theQRL/go-qrl/crypto/pqcrypto/wallet"
 	"github.com/theQRL/go-qrl/internal/blocktest"
-	"github.com/theQRL/go-qrl/internal/testutil"
 	"github.com/theQRL/go-qrl/params"
 	"github.com/theQRL/go-qrl/rlp"
 )
 
-// TestBlockEncoding builds a canonical one-tx block, RLP-encodes it,
-// decodes the bytes back, and re-encodes. It asserts the round-trip is a
-// fixed point. A previous version compared against a hard-coded hex blob
-// produced pre-migration; with 64-byte addresses and the wider VM word the
-// blob is no longer valid, but canonicality of the encoding still is.
+// TestBlockEncoding builds a canonical one-tx block and pins its deterministic
+// 64-byte-address RLP encoding by encoded-byte hash, block hash and size.
 func TestBlockEncoding(t *testing.T) {
-	roundTripBlockEncoding(t, func(signer Signer, w wallet.Wallet) *Transaction {
-		to, _ := common.NewAddressFromString("Q000000000000000000000000000000000000000000000000000000009a9070028361F7AAbeB3f2F2Dc07F82C4a98A02a99aabbccddeeff001122334455667788")
-		tx, err := SignNewTx(w, signer, &DynamicFeeTx{
-			ChainID:   signer.ChainID(),
-			Nonce:     9,
-			To:        &to,
-			Value:     big.NewInt(1),
-			Gas:       params.TxGas,
-			GasFeeCap: big.NewInt(875000000),
-			GasTipCap: big.NewInt(params.Shor / 1000),
-			Data:      nil,
+	checkBlockEncoding(t,
+		common.HexToHash("0x9444aea341fe6f7b9b47ec171c2da543106cf0d7623a5668ee0fa64b1a292cdb"),
+		common.HexToHash("0xa060138446e6118e502dc8cba81d494adf691346ee9504eaec9b842081ad1f48"),
+		7868,
+		func(signer Signer) *Transaction {
+			to, _ := common.NewAddressFromString("Q000000000000000000000000000000000000000000000000000000009a9070028361F7AAbeB3f2F2Dc07F82C4a98A02a99aabbccddeeff001122334455667788")
+			tx := NewTx(&DynamicFeeTx{
+				ChainID:   signer.ChainID(),
+				Nonce:     9,
+				To:        &to,
+				Value:     big.NewInt(1),
+				Gas:       params.TxGas,
+				GasFeeCap: big.NewInt(875000000),
+				GasTipCap: big.NewInt(params.Shor / 1000),
+				Data:      nil,
+			})
+			return mustWithDeterministicAuth(t, tx, signer, 1)
 		})
-		if err != nil {
-			t.Fatalf("sign tx: %v", err)
-		}
-		return tx
-	})
 }
 
 // TestEIP1559BlockEncoding is TestBlockEncoding with non-zero gas-tip/fee-cap
 // to exercise the EIP-1559 encoding path.
 func TestEIP1559BlockEncoding(t *testing.T) {
-	roundTripBlockEncoding(t, func(signer Signer, w wallet.Wallet) *Transaction {
-		to, _ := common.NewAddressFromString("Q000000000000000000000000000000000000000000000000000000009a9070028361F7AAbeB3f2F2Dc07F82C4a98A02a99aabbccddeeff001122334455667788")
-		tx, err := SignNewTx(w, signer, &DynamicFeeTx{
-			ChainID:   signer.ChainID(),
-			Nonce:     18,
-			To:        &to,
-			Value:     big.NewInt(1),
-			Gas:       25300,
-			GasFeeCap: big.NewInt(875000000),
-			GasTipCap: big.NewInt(params.Shor / 1000),
-			AccessList: AccessList{
-				AccessTuple{
-					Address:     to,
-					StorageKeys: []common.Hash{{}},
+	checkBlockEncoding(t,
+		common.HexToHash("0xf84390c3382868a514824293c86bb0695a3d66db67d4e462052340536aaf73ef"),
+		common.HexToHash("0x72fb89842ca474034176e6b1cc87d49ee407e01c4b46d1dc54e1b34a5b2bd389"),
+		7971,
+		func(signer Signer) *Transaction {
+			to, _ := common.NewAddressFromString("Q000000000000000000000000000000000000000000000000000000009a9070028361F7AAbeB3f2F2Dc07F82C4a98A02a99aabbccddeeff001122334455667788")
+			tx := NewTx(&DynamicFeeTx{
+				ChainID:   signer.ChainID(),
+				Nonce:     18,
+				To:        &to,
+				Value:     big.NewInt(1),
+				Gas:       25300,
+				GasFeeCap: big.NewInt(875000000),
+				GasTipCap: big.NewInt(params.Shor / 1000),
+				AccessList: AccessList{
+					AccessTuple{
+						Address:     to,
+						StorageKeys: []common.Hash{{}},
+					},
 				},
-			},
+			})
+			return mustWithDeterministicAuth(t, tx, signer, 2)
 		})
-		if err != nil {
-			t.Fatalf("sign tx: %v", err)
-		}
-		return tx
-	})
 }
 
-// TestEIP2718BlockEncoding is the typed-transaction variant of the round-trip
-// — same invariants, a different transaction shape.
+// TestEIP2718BlockEncoding is the typed-transaction variant of the pinned block
+// RLP fixture — same invariants, a different transaction shape.
 func TestEIP2718BlockEncoding(t *testing.T) {
-	roundTripBlockEncoding(t, func(signer Signer, w wallet.Wallet) *Transaction {
-		to, _ := common.NewAddressFromString("Q000000000000000000000000000000000000000000000000000000009a9070028361F7AAbeB3f2F2Dc07F82C4a98A02a99aabbccddeeff001122334455667788")
-		tx, err := SignNewTx(w, signer, &DynamicFeeTx{
-			ChainID:   signer.ChainID(),
-			Nonce:     42,
-			To:        &to,
-			Value:     big.NewInt(1234),
-			Gas:       21300,
-			GasFeeCap: big.NewInt(875000000),
-			GasTipCap: big.NewInt(params.Shor / 2000),
-			Data:      []byte{0xde, 0xad, 0xbe, 0xef},
+	checkBlockEncoding(t,
+		common.HexToHash("0x725ab346b675511b4d8644b4b3f56e7048e245e1ea1ad746e6d70a407f874efa"),
+		common.HexToHash("0x17d953f6af271a0ba53aaccf1cd8b55a61964068a340710c9bbbe0033869b693"),
+		7874,
+		func(signer Signer) *Transaction {
+			to, _ := common.NewAddressFromString("Q000000000000000000000000000000000000000000000000000000009a9070028361F7AAbeB3f2F2Dc07F82C4a98A02a99aabbccddeeff001122334455667788")
+			tx := NewTx(&DynamicFeeTx{
+				ChainID:   signer.ChainID(),
+				Nonce:     42,
+				To:        &to,
+				Value:     big.NewInt(1234),
+				Gas:       21300,
+				GasFeeCap: big.NewInt(875000000),
+				GasTipCap: big.NewInt(params.Shor / 2000),
+				Data:      []byte{0xde, 0xad, 0xbe, 0xef},
+			})
+			return mustWithDeterministicAuth(t, tx, signer, 3)
 		})
-		if err != nil {
-			t.Fatalf("sign tx: %v", err)
-		}
-		return tx
-	})
 }
 
-// roundTripBlockEncoding drives the encode→decode→encode fixed-point check.
-// Callers supply a factory that produces the signed transaction included in
-// the block so each test can exercise its own transaction shape without
-// duplicating the block scaffolding.
-func roundTripBlockEncoding(t *testing.T, makeTx func(Signer, wallet.Wallet) *Transaction) {
+func mustWithDeterministicAuth(t *testing.T, tx *Transaction, signer Signer, seed byte) *Transaction {
+	t.Helper()
+
+	sig := bytes.Repeat([]byte{seed}, pqcrypto.MLDSA87SignatureLength)
+	pk := bytes.Repeat([]byte{seed + 0x10}, pqcrypto.MLDSA87PublicKeyLength)
+	desc := []byte{0x01, 0x00, 0x00}
+	extraParams := []byte{seed + 0x20}
+
+	signed, err := tx.WithAuthValues(signer, sig, pk, desc, extraParams)
+	if err != nil {
+		t.Fatalf("attach deterministic auth values: %v", err)
+	}
+	return signed
+}
+
+func checkBlockEncoding(t *testing.T, wantEncodedHash, wantBlockHash common.Hash, wantSize uint64, makeTx func(Signer) *Transaction) {
 	t.Helper()
 	signer := ZondSigner{ChainId: big.NewInt(1337)}
-	w := testutil.LoadAccount(t, "alice").Wallet(t)
-	tx := makeTx(signer, w)
+	tx := makeTx(signer)
 
 	header := &Header{
 		ParentHash:      common.Hash{},
@@ -140,6 +150,16 @@ func roundTripBlockEncoding(t *testing.T, makeTx func(Signer, wallet.Wallet) *Tr
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
+	encodedHash := crypto.Keccak256Hash(enc)
+	if encodedHash != wantEncodedHash {
+		t.Fatalf("encoded hash mismatch: got %s want %s; block hash %s size %d", encodedHash, wantEncodedHash, block.Hash(), block.Size())
+	}
+	if got := block.Hash(); got != wantBlockHash {
+		t.Fatalf("block hash mismatch: got %s want %s", got, wantBlockHash)
+	}
+	if got := block.Size(); got != wantSize {
+		t.Fatalf("block size mismatch: got %d want %d", got, wantSize)
+	}
 
 	var decoded Block
 	if err := rlp.DecodeBytes(enc, &decoded); err != nil {
@@ -158,6 +178,15 @@ func roundTripBlockEncoding(t *testing.T, makeTx func(Signer, wallet.Wallet) *Tr
 	}
 	if got, want := decoded.Transactions()[0].Hash(), tx.Hash(); got != want {
 		t.Errorf("Transactions[0].Hash mismatch: got %x, want %x", got, want)
+	}
+	if got, want := decoded.Hash(), block.Hash(); got != want {
+		t.Errorf("Hash mismatch: got %x, want %x", got, want)
+	}
+	if got, want := decoded.Root(), block.Root(); got != want {
+		t.Errorf("Root mismatch: got %x, want %x", got, want)
+	}
+	if got, want := decoded.Time(), block.Time(); got != want {
+		t.Errorf("Time mismatch: got %d, want %d", got, want)
 	}
 
 	// Canonicality: re-encoding the decoded block must produce the same bytes.
