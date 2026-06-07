@@ -288,6 +288,49 @@ func revertCode() []byte {
 	}
 }
 
+func invalidCode() []byte {
+	return []byte{byte(vm.INVALID)}
+}
+
+func outOfGasCode() []byte {
+	return []byte{
+		byte(vm.JUMPDEST),
+		byte(vm.PUSH1), 0x00,
+		byte(vm.JUMP),
+	}
+}
+
+func codecopyAndExit(data []byte, op vm.OpCode) []byte {
+	if len(data) > 255 {
+		panic("fixture payload exceeds PUSH1 size")
+	}
+	codeOffset := byte(12)
+	return append([]byte{
+		byte(vm.PUSH1), byte(len(data)),
+		byte(vm.PUSH1), codeOffset,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.CODECOPY),
+		byte(vm.PUSH1), byte(len(data)),
+		byte(vm.PUSH1), 0x00,
+		byte(op),
+	}, data...)
+}
+
+func revertReasonPayload(reason string) []byte {
+	msg := []byte(reason)
+	paddedLen := ((len(msg) + 31) / 32) * 32
+	payload := make([]byte, 4+32+32+paddedLen)
+	copy(payload[:4], []byte{0x08, 0xc3, 0x79, 0xa0}) // Error(string)
+	payload[4+31] = 0x20
+	payload[4+32+31] = byte(len(msg))
+	copy(payload[4+64:], msg)
+	return payload
+}
+
+func revertReasonCode(reason string) []byte {
+	return codecopyAndExit(revertReasonPayload(reason), vm.REVERT)
+}
+
 func sstoreCode(slot, value byte) []byte {
 	return []byte{
 		byte(vm.PUSH1), value,
@@ -349,6 +392,31 @@ func precompileScenario(sc *fixtureScenario) {
 	sc.targetCode = append(seq(code, log1(0x61)), byte(vm.STOP))
 }
 
+func innerCallScenario(sc *fixtureScenario, childCode, outerTail []byte) {
+	child := fixtureAddress(0xa1)
+	sc.targetCode = append(callContract(child), outerTail...)
+	sc.extraAlloc[child] = accountWithCode(childCode)
+}
+
+func createThenInvalidScenario(sc *fixtureScenario) {
+	initCode := outOfGasCode()
+	if len(initCode) > 255 {
+		panic("fixture initcode exceeds PUSH1 size")
+	}
+	codeOffset := byte(15)
+	sc.targetCode = append([]byte{
+		byte(vm.PUSH1), byte(len(initCode)),
+		byte(vm.PUSH1), codeOffset,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.CODECOPY),
+		byte(vm.PUSH1), byte(len(initCode)),
+		byte(vm.PUSH1), 0x00,
+		byte(vm.PUSH1), 0x00,
+		byte(vm.CREATE),
+		byte(vm.INVALID),
+	}, initCode...)
+}
+
 func scenarioForFixture(rel string) fixtureScenario {
 	name := strings.TrimSuffix(path.Base(rel), ".json")
 	sc := fixtureScenario{
@@ -367,6 +435,20 @@ func scenarioForFixture(rel string) fixtureScenario {
 		sc.targetCode = repeatedLogs(50)
 	case strings.Contains(name, "include_precompiled") || strings.Contains(name, "precompiled"):
 		precompileScenario(&sc)
+	case strings.Contains(name, "inner_create_oog_outer_throw"):
+		createThenInvalidScenario(&sc)
+		sc.gas = 80_000
+	case strings.Contains(name, "inner_throw_outer_revert"):
+		innerCallScenario(&sc, invalidCode(), revertCode())
+	case strings.Contains(name, "inner_revert_reason"):
+		innerCallScenario(&sc, revertReasonCode("Self-delegation is disallowed."), []byte{byte(vm.STOP)})
+	case strings.Contains(name, "revert_reason"):
+		sc.targetCode = revertReasonCode("Self-delegation is disallowed.")
+	case strings.Contains(name, "oog"):
+		sc.targetCode = outOfGasCode()
+		sc.gas = 30_000
+	case strings.Contains(name, "throw"):
+		sc.targetCode = invalidCode()
 	case strings.Contains(name, "deep") || strings.Contains(name, "inner") || strings.Contains(name, "nested"):
 		deepCallScenario(&sc)
 	case strings.Contains(name, "transfer"):

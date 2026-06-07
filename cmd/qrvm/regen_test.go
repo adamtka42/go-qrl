@@ -385,6 +385,7 @@ Fixture data is regenerated for 64-byte QRL addresses. Run ` + "`WRITE_FIXTURES=
 	for _, name := range []string{"1", "3", "13", "24", "25", "26"} {
 		copyFile("exp.json", filepath.Join("testdata", name, "exp.json"))
 	}
+	regenerateDuplicateNonceFixture(t, qrvm)
 	copyFile("env-missingrandom.json", filepath.Join("testdata", "24", "env-missingrandom.json"))
 	copyFile("signed_txs.rlp", filepath.Join("testdata", "13", "signed_txs.rlp"))
 	signedResultCmd := exec.Command(qrvm, "t8n",
@@ -426,4 +427,55 @@ Fixture data is regenerated for 64-byte QRL addresses. Run ` + "`WRITE_FIXTURES=
 	copyFile("withdrawals.json", filepath.Join("testdata", "20", "withdrawals.json"))
 	copyFile("withdrawals.json", filepath.Join("testdata", "27", "withdrawals.json"))
 	copyFile("b11r_withdrawals_exp.json", filepath.Join("testdata", "27", "exp.json"))
+}
+
+func regenerateDuplicateNonceFixture(t *testing.T, qrvm string) {
+	t.Helper()
+
+	dir := filepath.Join("testdata", "1")
+	txsPath := filepath.Join(dir, "txs.json")
+	data, err := os.ReadFile(txsPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", txsPath, err)
+	}
+	var txs []map[string]any
+	if err := json.Unmarshal(data, &txs); err != nil {
+		t.Fatalf("parse %s: %v", txsPath, err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("%s: expected one base tx, got %d", txsPath, len(txs))
+	}
+	txs = append(txs, txs[0])
+	prettyTxs, err := json.MarshalIndent(txs, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal duplicate nonce txs: %v", err)
+	}
+	if err := os.WriteFile(txsPath, append(prettyTxs, '\n'), 0644); err != nil {
+		t.Fatalf("write %s: %v", txsPath, err)
+	}
+
+	cmd := exec.Command(qrvm, "t8n",
+		"--input.alloc", filepath.Join(dir, "alloc.json"),
+		"--input.env", filepath.Join(dir, "env.json"),
+		"--input.txs", txsPath,
+		"--state.fork", "Zond",
+		"--output.alloc", "stdout",
+		"--output.result", "stdout",
+		"--output.body", "",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("t8n duplicate nonce invocation failed: %v\nstderr: %s", err, asStderr(err))
+	}
+	var wrapped map[string]json.RawMessage
+	if err := json.Unmarshal(out, &wrapped); err != nil {
+		t.Fatalf("parse duplicate nonce t8n stdout: %v\noutput: %s", err, out)
+	}
+	prettyExp, err := json.MarshalIndent(wrapped, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal duplicate nonce exp.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "exp.json"), append(prettyExp, '\n'), 0644); err != nil {
+		t.Fatalf("write duplicate nonce exp.json: %v", err)
+	}
 }

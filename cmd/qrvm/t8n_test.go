@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -154,9 +155,8 @@ func TestT8n(t *testing.T) {
 			input: t8nInput{
 				"alloc.json", "signed_txs.rlp", "env.json", "Zond", "",
 			},
-			output:               t8nOutput{result: true},
-			expOut:               "exp2.json",
-			ignoreSignedTxHashes: true,
+			output: t8nOutput{result: true},
+			expOut: "exp2.json",
 		},
 		{
 			base: "./testdata/24",
@@ -413,10 +413,55 @@ func cmpJsonWithOptions(a, b []byte, opts cmpOptions) (bool, error) {
 		return false, err
 	}
 	if opts.ignoreSignedTxHashes {
+		if err := validateSignedTxHashes(j); err != nil {
+			return false, err
+		}
+		if err := validateSignedTxHashes(j2); err != nil {
+			return false, err
+		}
 		normalizeSignedTxHashes(j)
 		normalizeSignedTxHashes(j2)
 	}
 	return reflect.DeepEqual(j2, j), nil
+}
+
+func validateSignedTxHashes(v any) error {
+	root, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	result, ok := root["result"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if err := validateHexHashField(result, "txRoot"); err != nil {
+		return err
+	}
+	receipts, _ := result["receipts"].([]any)
+	for i, receipt := range receipts {
+		r, ok := receipt.(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := validateHexHashField(r, "transactionHash"); err != nil {
+			return fmt.Errorf("receipt %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func validateHexHashField(obj map[string]any, field string) error {
+	value, ok := obj[field].(string)
+	if !ok {
+		return fmt.Errorf("%s missing or not string", field)
+	}
+	if len(value) != 66 || !strings.HasPrefix(value, "0x") {
+		return fmt.Errorf("%s is not a 32-byte hex hash: %q", field, value)
+	}
+	if _, err := hex.DecodeString(value[2:]); err != nil {
+		return fmt.Errorf("%s is not valid hex: %w", field, err)
+	}
+	return nil
 }
 
 func normalizeSignedTxHashes(v any) {
@@ -428,11 +473,11 @@ func normalizeSignedTxHashes(v any) {
 	if !ok {
 		return
 	}
-	result["txRoot"] = "<nondeterministic ML-DSA-87 signature>"
+	result["txRoot"] = "<dynamic ML-DSA-87 signature>"
 	receipts, _ := result["receipts"].([]any)
 	for _, receipt := range receipts {
 		if r, ok := receipt.(map[string]any); ok {
-			r["transactionHash"] = "<nondeterministic ML-DSA-87 signature>"
+			r["transactionHash"] = "<dynamic ML-DSA-87 signature>"
 		}
 	}
 }
