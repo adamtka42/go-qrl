@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	"github.com/theQRL/go-qrl/common"
+	"github.com/theQRL/go-qrl/crypto"
+	"github.com/theQRL/go-qrl/crypto/pqcrypto"
 	"github.com/theQRL/go-qrl/crypto/pqcrypto/wallet"
 	"github.com/theQRL/go-qrl/internal/testutil"
 	"github.com/theQRL/go-qrl/rlp"
@@ -234,33 +236,74 @@ func TestEIP2930Signer(t *testing.T) {
 }
 
 func TestEIP2718TransactionEncode(t *testing.T) {
-	// Previously this test compared against a hand-crafted RLP blob built
-	// for 20-byte addresses and a fixed MLDSA-87 signature. Regenerating
-	// that blob for every new address layout is brittle; instead, verify
-	// the encoding round-trips: encode → decode → compare hashes.
+	assertAuthLayout := func(label string, tx *Transaction) {
+		t.Helper()
+
+		if got := tx.Type(); got != DynamicFeeTxType {
+			t.Fatalf("%s: tx type mismatch: got %d, want %d", label, got, DynamicFeeTxType)
+		}
+		if got := len(tx.Descriptor()); got != pqcrypto.DescriptorSize {
+			t.Fatalf("%s: descriptor length mismatch: got %d, want %d", label, got, pqcrypto.DescriptorSize)
+		}
+		if got := len(tx.ExtraParams()); got != 0 {
+			t.Fatalf("%s: extraParams length mismatch: got %d, want 0", label, got)
+		}
+		if got := len(tx.RawSignatureValue()); got != pqcrypto.MLDSA87SignatureLength {
+			t.Fatalf("%s: signature length mismatch: got %d, want %d", label, got, pqcrypto.MLDSA87SignatureLength)
+		}
+		if got := len(tx.RawPublicKeyValue()); got != pqcrypto.MLDSA87PublicKeyLength {
+			t.Fatalf("%s: publicKey length mismatch: got %d, want %d", label, got, pqcrypto.MLDSA87PublicKeyLength)
+		}
+	}
+
+	assertAuthLayout("fixture", signedEip2718Tx)
+
+	// RLP envelope representation.
 	{
 		have, err := rlp.EncodeToBytes(signedEip2718Tx)
 		if err != nil {
 			t.Fatalf("encode error: %v", err)
 		}
+		if got, want := crypto.Keccak256Hash(have), common.HexToHash("0x4e8e388534b836075a5b6870fb3305ed2c686e17b9cbc1bdfe0ec31a19845c22"); got != want {
+			t.Fatalf("RLP encoded hash mismatch: got %s want %s; len %d", got, want, len(have))
+		}
+		if got, want := len(have), 7315; got != want {
+			t.Fatalf("RLP encoded length mismatch: got %d want %d", got, want)
+		}
+
 		var decoded Transaction
 		if err := rlp.DecodeBytes(have, &decoded); err != nil {
 			t.Fatalf("decode error: %v", err)
 		}
+		assertAuthLayout("RLP decoded", &decoded)
 		if decoded.Hash() != signedEip2718Tx.Hash() {
 			t.Fatalf("RLP round-trip hash mismatch: got %x want %x", decoded.Hash(), signedEip2718Tx.Hash())
 		}
 	}
-	// Binary representation
+	// Canonical binary representation: typed prefix followed by the tx payload.
 	{
 		have, err := signedEip2718Tx.MarshalBinary()
 		if err != nil {
 			t.Fatalf("encode error: %v", err)
 		}
+		if len(have) == 0 {
+			t.Fatal("binary encoding is empty")
+		}
+		if got := have[0]; got != DynamicFeeTxType {
+			t.Fatalf("typed tx prefix mismatch: got %d want %d", got, DynamicFeeTxType)
+		}
+		if got, want := crypto.Keccak256Hash(have), common.HexToHash("0x7cb90b35d0063ee072f01c90d1e6a3b7d8c35f59415c635d65608a5f5a35b86f"); got != want {
+			t.Fatalf("binary hash mismatch: got %s want %s; len %d", got, want, len(have))
+		}
+		if got, want := len(have), 7312; got != want {
+			t.Fatalf("binary length mismatch: got %d want %d", got, want)
+		}
+
 		var decoded Transaction
 		if err := decoded.UnmarshalBinary(have); err != nil {
 			t.Fatalf("decode error: %v", err)
 		}
+		assertAuthLayout("binary decoded", &decoded)
 		if decoded.Hash() != signedEip2718Tx.Hash() {
 			t.Fatalf("binary round-trip hash mismatch: got %x want %x", decoded.Hash(), signedEip2718Tx.Hash())
 		}
