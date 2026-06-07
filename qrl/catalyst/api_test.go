@@ -101,7 +101,7 @@ func TestAssembleBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error signing transaction, err=%v", err)
 	}
-	qrlservice.TxPool().Add([]*types.Transaction{tx}, true, false)
+	addTxsToPool(t, qrlservice.TxPool(), []*types.Transaction{tx}, true, false)
 	blockParams := engine.PayloadAttributes{
 		Timestamp: blocks[9].Time() + 5,
 	}
@@ -112,21 +112,50 @@ func TestAssembleBlock(t *testing.T) {
 	}
 }
 
-// assembleWithTransactions tries to assemble a block, retrying until it has 'want',
-// number of transactions in it, or it has retried three times.
+// assembleWithTransactions tries to assemble a block until the miner picks up
+// the expected number of transactions from the pool.
 func assembleWithTransactions(api *ConsensusAPI, parentHash common.Hash, params *engine.PayloadAttributes, want int) (execData *engine.ExecutableData, err error) {
-	for retries := 3; retries > 0; retries-- {
+	for retries := 10; retries > 0; retries-- {
 		execData, err = assembleBlock(api, parentHash, params)
 		if err != nil {
 			return nil, err
 		}
 		if have, want := len(execData.Transactions), want; have != want {
 			err = fmt.Errorf("invalid number of transactions, have %d want %d", have, want)
+			time.Sleep(25 * time.Millisecond)
 			continue
 		}
 		return execData, nil
 	}
 	return nil, err
+}
+
+func getPayloadWithTransactions(api *ConsensusAPI, payloadID engine.PayloadID, want int) (payload *engine.ExecutionPayloadEnvelope, err error) {
+	for retries := 10; retries > 0; retries-- {
+		payload, err = api.getPayload(payloadID, true)
+		if err != nil {
+			return nil, err
+		}
+		if have := len(payload.ExecutionPayload.Transactions); have != want {
+			err = fmt.Errorf("invalid number of transactions, have %d want %d", have, want)
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		return payload, nil
+	}
+	return nil, err
+}
+
+func addTxsToPool(t *testing.T, pool interface {
+	Add([]*types.Transaction, bool, bool) []error
+}, txs []*types.Transaction, local bool, sync bool) {
+	t.Helper()
+
+	for i, err := range pool.Add(txs, local, sync) {
+		if err != nil {
+			t.Fatalf("failed to add tx %d (%s) to txpool: %v", i, txs[i].Hash(), err)
+		}
+	}
 }
 
 func TestAssembleBlockWithAnotherBlocksTxs(t *testing.T) {
@@ -138,7 +167,7 @@ func TestAssembleBlockWithAnotherBlocksTxs(t *testing.T) {
 
 	// Put the 10th block's tx in the pool and produce a new block
 	txs := blocks[9].Transactions()
-	api.qrl.TxPool().Add(txs, false, true)
+	addTxsToPool(t, api.qrl.TxPool(), txs, false, true)
 	blockParams := engine.PayloadAttributes{
 		Timestamp: blocks[8].Time() + 5,
 	}
@@ -158,7 +187,7 @@ func TestPrepareAndGetPayload(t *testing.T) {
 
 	// Put the 10th block's tx in the pool and produce a new block
 	txs := blocks[9].Transactions()
-	qrlservice.TxPool().Add(txs, true, false)
+	addTxsToPool(t, qrlservice.TxPool(), txs, true, true)
 	blockParams := engine.PayloadAttributes{
 		Timestamp:   blocks[8].Time() + 5,
 		Withdrawals: []*types.Withdrawal{},
@@ -172,20 +201,15 @@ func TestPrepareAndGetPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error preparing payload, err=%v", err)
 	}
-	// give the payload some time to be built
-	time.Sleep(100 * time.Millisecond)
 	payloadID := (&miner.BuildPayloadArgs{
 		Parent:       fcState.HeadBlockHash,
 		Timestamp:    blockParams.Timestamp,
 		FeeRecipient: blockParams.SuggestedFeeRecipient,
 		Random:       blockParams.Random,
 	}).Id()
-	execData, err := api.GetPayloadV2(payloadID)
+	_, err = getPayloadWithTransactions(api, payloadID, blocks[9].Transactions().Len())
 	if err != nil {
 		t.Fatalf("error getting payload, err=%v", err)
-	}
-	if len(execData.ExecutionPayload.Transactions) != blocks[9].Transactions().Len() {
-		t.Fatalf("invalid number of transactions %d != 1", len(execData.ExecutionPayload.Transactions))
 	}
 	// Test invalid payloadID
 	var invPayload engine.PayloadID
@@ -290,7 +314,7 @@ func TestNewBlock(t *testing.T) {
 			Data:      logCode,
 		})
 		signedTx, _ := types.SignTx(tx, signer, testWallet)
-		qrlservice.TxPool().Add([]*types.Transaction{signedTx}, true, false)
+		addTxsToPool(t, qrlservice.TxPool(), []*types.Transaction{signedTx}, true, false)
 
 		execData, err := assembleWithTransactions(api, parent.Hash(), &engine.PayloadAttributes{
 			Timestamp: parent.Time() + 5,
@@ -550,7 +574,7 @@ func TestNewPayloadOnInvalidChain(t *testing.T) {
 			GasTipCap: big.NewInt(params.Shor),
 			Data:      logCode,
 		})
-		qrlservice.TxPool().Add([]*types.Transaction{tx}, false, true)
+		addTxsToPool(t, qrlservice.TxPool(), []*types.Transaction{tx}, false, true)
 		var (
 			params = engine.PayloadAttributes{
 				Timestamp:             parent.Time + 1,
