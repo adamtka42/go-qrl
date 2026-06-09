@@ -266,6 +266,14 @@ func TestReceiptJSON(t *testing.T) {
 	}
 }
 
+func TestReceiptSizeUsesLogTopicLength(t *testing.T) {
+	withoutTopic := (&Receipt{Logs: []*Log{{}}}).Size()
+	withTopic := (&Receipt{Logs: []*Log{{Topics: []common.LogTopic{{}}}}}).Size()
+	if diff := withTopic - withoutTopic; diff != common.LogTopicLength {
+		t.Fatalf("topic size mismatch: got %d want %d", uint64(diff), common.LogTopicLength)
+	}
+}
+
 // Test we can still parse receipt without EffectiveGasPrice for backwards compatibility, even
 // though it is required per the spec.
 func TestEffectiveGasPriceNotRequired(t *testing.T) {

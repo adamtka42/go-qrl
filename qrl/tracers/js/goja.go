@@ -392,13 +392,13 @@ func (t *jsTracer) setBuiltinFunctions() {
 		return hexutil.Encode(b)
 	})
 	vm.Set("toWord", func(v goja.Value) goja.Value {
-		// TODO: add test with []byte len < 32 or > 32
+		// TODO: add test with []byte len < 64 or > 64
 		b, err := t.fromBuf(vm, v, true)
 		if err != nil {
 			vm.Interrupt(err)
 			return nil
 		}
-		b = common.BytesToHash(b).Bytes()
+		b = common.BytesToStorageValue64(b).Bytes()
 		res, err := t.toBuf(vm, b)
 		if err != nil {
 			vm.Interrupt(err)
@@ -606,12 +606,12 @@ func (mo *memoryObj) GetUint(addr int64) goja.Value {
 	return res
 }
 
-// getUint returns the 32 bytes at the specified address interpreted as a uint.
+// getUint returns the 64 bytes at the specified address interpreted as a uint.
 func (mo *memoryObj) getUint(addr int64) (*big.Int, error) {
-	if mo.memory.Len() < int(addr)+32 || addr < 0 {
-		return nil, fmt.Errorf("tracer accessed out of bound memory: available %d, offset %d, size %d", mo.memory.Len(), addr, 32)
+	if mo.memory.Len() < int(addr)+64 || addr < 0 {
+		return nil, fmt.Errorf("tracer accessed out of bound memory: available %d, offset %d, size %d", mo.memory.Len(), addr, 64)
 	}
-	return new(big.Int).SetBytes(mo.memory.GetPtr(addr, 32)), nil
+	return new(big.Int).SetBytes(mo.memory.GetPtr(addr, 64)), nil
 }
 
 func (mo *memoryObj) Length() int {
